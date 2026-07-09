@@ -16,6 +16,7 @@ reason this file exists.
 """
 
 import asyncio
+import json
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -25,10 +26,28 @@ import ais_listener
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.startswith("/status"):
+            self._serve_status()
+        else:
+            self._serve_health()
+
+    def _serve_health(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"hormuz-watch listener is running\n")
+        self.wfile.write(b"hormuz-watch listener is running - see /status for live data\n")
+
+    def _serve_status(self):
+        try:
+            with open(ais_listener.SIGHTINGS_PATH) as f:
+                payload = json.load(f)
+        except FileNotFoundError:
+            payload = {"note": "sightings.json not written yet - listener may still be connecting"}
+        body = json.dumps(payload, indent=2).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, format, *args):
         pass  # don't let health-check pings flood the platform's log view
