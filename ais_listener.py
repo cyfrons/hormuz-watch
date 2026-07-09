@@ -184,7 +184,12 @@ async def listen():
                 print("Connected. Listening for vessels in the Hormuz bounding box...")
                 delay = INITIAL_RECONNECT_DELAY  # reset backoff after a real success
                 async for raw in ws:
-                    handle_message(conn, raw)
+                    try:
+                        handle_message(conn, raw)
+                    except Exception as e:
+                        # A single unexpected message shape shouldn't kill the whole
+                        # connection - log it and keep going.
+                        print(f"Skipping one malformed message ({e!r}): {raw[:200]}")
         except websockets.exceptions.InvalidStatus as e:
             print(f"Handshake rejected: HTTP {e.response.status_code} {e.response.reason_phrase!r}. "
                   f"Retrying in {delay}s...")
