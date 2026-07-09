@@ -90,7 +90,8 @@
     <span class="dot"></span>
     <h1>Hormuz Watch</h1>
     <span class="count" id="count"></span>
-    <span class="badge">DEMO DATA — SAMPLE VESSELS, NOT LIVE</span>
+    <span class="count" id="updated"></span>
+    <span class="badge" id="badge">DEMO DATA — SAMPLE VESSELS, NOT LIVE</span>
   </div>
   <div class="main">
     <div id="map"></div>
@@ -102,29 +103,42 @@
 </div>
 
 <script>
-  // --- DATA ----------------------------------------------------------
-  // In production, replace this block with:
-  //   const sightings = await fetch('sightings.json').then(r => r.json());
-  // (wrap the code below in an async function if you do that)
-  //
-  // For this preview, it's the exact output demo_with_sample_data.py
-  // just produced, pasted in directly so the page renders standalone.
-  const sightings = [
-    { "mmsi": 900000001, "lat": 26.57, "lon": 56.25, "imo": 9000001,
-      "name": "DEMO CARRIER ALPHA", "destination": "RDAM NL", "eta": "07151200" },
-    { "mmsi": 900000002, "lat": 26.3, "lon": 56.6, "imo": 9000002,
-      "name": "DEMO CARRIER BRAVO", "destination": "ZEEBRUGGE", "eta": "07180600" },
-    { "mmsi": 900000003, "lat": 26.75, "lon": 56.05, "imo": 9000003,
-      "name": "DEMO CARRIER CHARLIE", "destination": "SWINOUJSCIE PL", "eta": "07130800" }
-  ];
+  // --- DATA --------------------------------------------------------
+  // Real path: fetch sightings.json, written by export_latest_sightings()
+  // in ais_listener.py (or demo_with_sample_data.py while testing).
+  // Fallback: if fetch fails - e.g. opened as a lone local file, where
+  // browsers block fetch() of local files - show embedded sample data
+  // instead of a blank map.
+  const FALLBACK_PAYLOAD = {
+    source: "demo",
+    generated_at: null,
+    vessels: [
+      { mmsi: 900000001, lat: 26.57, lon: 56.25, imo: 9000001,
+        name: "DEMO CARRIER ALPHA", destination: "RDAM NL", eta: "07151200" },
+      { mmsi: 900000002, lat: 26.3, lon: 56.6, imo: 9000002,
+        name: "DEMO CARRIER BRAVO", destination: "ZEEBRUGGE", eta: "07180600" },
+      { mmsi: 900000003, lat: 26.75, lon: 56.05, imo: 9000003,
+        name: "DEMO CARRIER CHARLIE", destination: "SWINOUJSCIE PL", eta: "07130800" },
+    ],
+  };
 
-  // --- MAP -------------------------------------------------------------
-  const map = L.map('map', { zoomControl: true }).setView([26.55, 56.3], 8);
+  async function loadSightings() {
+    try {
+      const res = await fetch('sightings.json', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return await res.json();
+    } catch (err) {
+      console.warn('Could not fetch sightings.json, showing fallback demo data:', err);
+      return FALLBACK_PAYLOAD;
+    }
+  }
 
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; OpenStreetMap &copy; CARTO',
-    maxZoom: 18,
-  }).addTo(map);
+  // aisstream ETA arrives as an 8-digit MMDDHHmm string, UTC, no year.
+  function formatEta(eta) {
+    if (!eta || eta.length !== 8) return eta || 'unknown';
+    const mm = eta.slice(0, 2), dd = eta.slice(2, 4), hh = eta.slice(4, 6), min = eta.slice(6, 8);
+    return `${mm}/${dd} ${hh}:${min}Z`;
+  }
 
   // Radar-contact style marker instead of a default pin: a small core dot
   // with an expanding ring, closer to what this data actually is (a ping).
@@ -141,38 +155,52 @@
       iconAnchor: [9, 9],
     });
   }
-  const styleTag = document.createElement('style');
-  styleTag.textContent = `@keyframes blip-pulse { 0% { transform: scale(0.5); opacity: 0.4; } 100% { transform: scale(2.8); opacity: 0; } }`;
-  document.head.appendChild(styleTag);
 
-  // aisstream ETA arrives as an 8-digit MMDDHHmm string, UTC, no year.
-  function formatEta(eta) {
-    if (!eta || eta.length !== 8) return eta || 'unknown';
-    const mm = eta.slice(0, 2), dd = eta.slice(2, 4), hh = eta.slice(4, 6), min = eta.slice(6, 8);
-    return `${mm}/${dd} ${hh}:${min}Z`;
+  async function init() {
+    const styleTag = document.createElement('style');
+    styleTag.textContent = `@keyframes blip-pulse { 0% { transform: scale(0.5); opacity: 0.4; } 100% { transform: scale(2.8); opacity: 0; } }`;
+    document.head.appendChild(styleTag);
+
+    const payload = await loadSightings();
+    const vessels = payload.vessels || [];
+
+    // Badge only shows for demo/fallback data - hides itself once real data flows.
+    document.getElementById('badge').style.display = payload.source === 'demo' ? '' : 'none';
+    document.getElementById('updated').textContent = payload.generated_at
+      ? 'updated ' + payload.generated_at.slice(11, 16) + 'Z'
+      : '';
+    document.getElementById('count').textContent =
+      vessels.length + (vessels.length === 1 ? ' contact' : ' contacts');
+
+    const map = L.map('map', { zoomControl: true }).setView([26.55, 56.3], 8);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      maxZoom: 18,
+    }).addTo(map);
+
+    const listEl = document.getElementById('vessel-list');
+
+    vessels.forEach(v => {
+      const marker = L.marker([v.lat, v.lon], { icon: contactIcon() }).addTo(map);
+      marker.bindPopup(
+        `<div class="popup-name">${v.name}</div>` +
+        `<div class="popup-meta">IMO ${v.imo} &middot; MMSI ${v.mmsi}<br>` +
+        `&rarr; <span class="to">${v.destination || 'unknown'}</span><br>` +
+        `ETA ${formatEta(v.eta)}</div>`
+      );
+
+      const card = document.createElement('div');
+      card.className = 'vessel-card';
+      card.innerHTML =
+        `<div class="vessel-name">${v.name}</div>` +
+        `<div class="vessel-meta">IMO ${v.imo}<br>` +
+        `&rarr; <span class="to">${v.destination || 'unknown'}</span> &middot; ETA ${formatEta(v.eta)}</div>`;
+      card.addEventListener('click', () => { map.setView([v.lat, v.lon], 10); marker.openPopup(); });
+      listEl.appendChild(card);
+    });
   }
 
-  const listEl = document.getElementById('vessel-list');
-  document.getElementById('count').textContent = sightings.length + (sightings.length === 1 ? ' contact' : ' contacts');
-
-  sightings.forEach(v => {
-    const marker = L.marker([v.lat, v.lon], { icon: contactIcon() }).addTo(map);
-    marker.bindPopup(
-      `<div class="popup-name">${v.name}</div>` +
-      `<div class="popup-meta">IMO ${v.imo} &middot; MMSI ${v.mmsi}<br>` +
-      `&rarr; <span class="to">${v.destination || 'unknown'}</span><br>` +
-      `ETA ${formatEta(v.eta)}</div>`
-    );
-
-    const card = document.createElement('div');
-    card.className = 'vessel-card';
-    card.innerHTML =
-      `<div class="vessel-name">${v.name}</div>` +
-      `<div class="vessel-meta">IMO ${v.imo}<br>` +
-      `&rarr; <span class="to">${v.destination || 'unknown'}</span> &middot; ETA ${formatEta(v.eta)}</div>`;
-    card.addEventListener('click', () => { map.setView([v.lat, v.lon], 10); marker.openPopup(); });
-    listEl.appendChild(card);
-  });
+  init();
 </script>
 </body>
 </html>

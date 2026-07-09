@@ -35,8 +35,11 @@ import websockets
 HORMUZ_BBOX = [[25.5, 55.5], [27.0, 57.0]]
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "hormuz_transits.db")
+SIGHTINGS_PATH = os.path.join(os.path.dirname(__file__), "sightings.json")
 
 AISSTREAM_URL = "wss://stream.aisstream.io/v0/stream"
+EXPORT_INTERVAL_SECONDS = 60   # how often sightings.json gets refreshed
+RECONNECT_DELAY_SECONDS = 10   # wait before retrying a dropped connection
 
 
 def init_db(db_path=DB_PATH):
@@ -99,22 +102,79 @@ def handle_message(conn, raw_message):
         conn.commit()
 
 
+def export_latest_sightings(conn, out_path=SIGHTINGS_PATH, source="live"):
+    """
+    For each MMSI, take its most recent position and its most recent
+    static/identity info, and merge them into one row - the 'current
+    picture' index.html actually needs, not the raw ping log.
+
+    Writes a small envelope, not a bare array, so the frontend can show
+    how fresh the data is and whether it's real ("live") or a demo run.
+    """
+    rows = conn.execute(
+        """
+        SELECT mmsi,
+               MAX(CASE WHEN lat IS NOT NULL THEN lat END) AS lat,
+               MAX(CASE WHEN lon IS NOT NULL THEN lon END) AS lon,
+               MAX(imo) AS imo,
+               MAX(CASE WHEN name != '' THEN name END) AS name,
+               MAX(CASE WHEN destination != '' THEN destination END) AS destination,
+               MAX(eta) AS eta
+        FROM pings
+        GROUP BY mmsi
+        """
+    ).fetchall()
+
+    cols = ["mmsi", "lat", "lon", "imo", "name", "destination", "eta"]
+    vessels = [dict(zip(cols, row)) for row in rows if row[1] is not None]
+
+    payload = {
+        "source": source,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "vessels": vessels,
+    }
+    with open(out_path, "w") as f:
+        json.dump(payload, f, indent=2)
+    return payload
+
+
+async def periodic_export(conn):
+    """Runs alongside the listener for as long as the process lives, refreshing
+    sightings.json on a timer so the map never goes too stale."""
+    while True:
+        await asyncio.sleep(EXPORT_INTERVAL_SECONDS)
+        payload = export_latest_sightings(conn)
+        stamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        print(f"[{stamp}] exported {len(payload['vessels'])} vessel(s) to sightings.json")
+
+
 async def listen():
-    """The real, live connection. Only works from a machine with open internet."""
+    """
+    The real, live connection. Only works from a machine with open internet.
+    Reconnects automatically if the connection drops - matters on free-tier
+    hosting, flaky wifi, or any long unattended run.
+    """
     api_key = os.environ.get("AISSTREAM_KEY")
     if not api_key:
         raise SystemExit("Set an AISSTREAM_KEY environment variable first (get a free key at aisstream.io).")
 
     conn = init_db()
-    async with websockets.connect(AISSTREAM_URL) as ws:
-        await ws.send(json.dumps({
-            "Apikey": api_key,
-            "BoundingBoxes": [HORMUZ_BBOX],
-            "FilterMessageTypes": ["PositionReport", "ShipStaticData"],
-        }))
-        print("Connected. Listening for vessels in the Hormuz bounding box...")
-        async for raw in ws:
-            handle_message(conn, raw)
+    asyncio.create_task(periodic_export(conn))
+
+    while True:
+        try:
+            async with websockets.connect(AISSTREAM_URL) as ws:
+                await ws.send(json.dumps({
+                    "Apikey": api_key,
+                    "BoundingBoxes": [HORMUZ_BBOX],
+                    "FilterMessageTypes": ["PositionReport", "ShipStaticData"],
+                }))
+                print("Connected. Listening for vessels in the Hormuz bounding box...")
+                async for raw in ws:
+                    handle_message(conn, raw)
+        except (websockets.exceptions.ConnectionClosed, OSError) as e:
+            print(f"Connection dropped ({e!r}). Reconnecting in {RECONNECT_DELAY_SECONDS}s...")
+            await asyncio.sleep(RECONNECT_DELAY_SECONDS)
 
 
 if __name__ == "__main__":

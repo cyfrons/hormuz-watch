@@ -15,9 +15,8 @@ for the frontend to fetch.
 """
 
 import json
-import sqlite3
 
-from ais_listener import DB_PATH, handle_message, init_db
+from ais_listener import DB_PATH, export_latest_sightings, handle_message, init_db
 
 # Fictional test vessels. Real IMO/MMSI numbers are 7 and 9 digits;
 # these are deliberately made up and don't correspond to real ships.
@@ -61,34 +60,6 @@ SAMPLE_MESSAGES = [
 ]
 
 
-def export_latest_sightings(conn, out_path):
-    """
-    For each MMSI, take its most recent position and its most recent
-    static/identity info, and merge them into one row. This is the
-    'current picture' the map actually needs - not the raw ping log.
-    """
-    rows = conn.execute(
-        """
-        SELECT mmsi,
-               MAX(CASE WHEN lat IS NOT NULL THEN lat END) AS lat,
-               MAX(CASE WHEN lon IS NOT NULL THEN lon END) AS lon,
-               MAX(imo) AS imo,
-               MAX(CASE WHEN name != '' THEN name END) AS name,
-               MAX(CASE WHEN destination != '' THEN destination END) AS destination,
-               MAX(eta) AS eta
-        FROM pings
-        GROUP BY mmsi
-        """
-    ).fetchall()
-
-    cols = ["mmsi", "lat", "lon", "imo", "name", "destination", "eta"]
-    sightings = [dict(zip(cols, row)) for row in rows if row[1] is not None]
-
-    with open(out_path, "w") as f:
-        json.dump(sightings, f, indent=2)
-    return sightings
-
-
 if __name__ == "__main__":
     conn = init_db()
     for msg in SAMPLE_MESSAGES:
@@ -99,7 +70,8 @@ if __name__ == "__main__":
     for row in conn.execute("SELECT mmsi, name, lat, lon, destination FROM pings"):
         print(" ", row)
 
-    sightings = export_latest_sightings(conn, "sightings.json")
-    print(f"\nExported {len(sightings)} merged vessel sightings to sightings.json:")
-    for s in sightings:
-        print(" ", s)
+    payload = export_latest_sightings(conn, "sightings.json", source="demo")
+    print(f"\nExported {len(payload['vessels'])} merged vessel sightings to sightings.json:")
+    print(f"  source={payload['source']!r}  generated_at={payload['generated_at']!r}")
+    for v in payload["vessels"]:
+        print(" ", v)
