@@ -101,6 +101,12 @@ def handle_message(conn, raw_message):
         )
         conn.commit()
 
+    elif "error" in msg:
+        # aisstream.io sends this as a real message before closing the
+        # connection - e.g. an invalid key or a malformed subscription.
+        # Print it loudly rather than letting it vanish silently.
+        print(f"!!! aisstream.io reported an error: {msg['error']!r}")
+
 
 def export_latest_sightings(conn, out_path=SIGHTINGS_PATH, source="live"):
     """
