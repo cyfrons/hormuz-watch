@@ -1,0 +1,29 @@
+[
+  {
+    "mmsi": 900000001,
+    "lat": 26.57,
+    "lon": 56.25,
+    "imo": 9000001,
+    "name": "DEMO CARRIER ALPHA",
+    "destination": "RDAM NL",
+    "eta": "07151200"
+  },
+  {
+    "mmsi": 900000002,
+    "lat": 26.3,
+    "lon": 56.6,
+    "imo": 9000002,
+    "name": "DEMO CARRIER BRAVO",
+    "destination": "ZEEBRUGGE",
+    "eta": "07180600"
+  },
+  {
+    "mmsi": 900000003,
+    "lat": 26.75,
+    "lon": 56.05,
+    "imo": 9000003,
+    "name": "DEMO CARRIER CHARLIE",
+    "destination": "SWINOUJSCIE PL",
+    "eta": "07130800"
+  }
+]

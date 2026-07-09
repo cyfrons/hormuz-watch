@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hormuz Watch — chokepoint tracker</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --bg: #0A121B;
+    --panel: #101B28;
+    --border: #1C3348;
+    --text: #CBD9E0;
+    --muted: #5E7A8C;
+    --accent: #4ADE94;
+    --warn: #FF8552;
+    --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); font-family: var(--sans); color: var(--text); }
+
+  .app { display: flex; flex-direction: column; height: 100vh; }
+
+  .topbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    background: var(--panel); z-index: 10;
+  }
+  .topbar .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 6px var(--accent); flex-shrink: 0;
+  }
+  .topbar h1 {
+    font-size: 13px; letter-spacing: 0.09em; text-transform: uppercase;
+    font-weight: 600; margin: 0; color: var(--text); white-space: nowrap;
+  }
+  .count { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .badge {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.02em;
+    color: var(--warn); border: 1px solid var(--warn); border-radius: 3px;
+    padding: 3px 6px; margin-left: auto; white-space: nowrap;
+  }
+
+  .main { display: flex; flex: 1; min-height: 0; }
+  #map { flex: 1; background: var(--bg); }
+
+  .panel {
+    width: 280px; border-left: 1px solid var(--border); background: var(--panel);
+    overflow-y: auto; flex-shrink: 0;
+  }
+  .panel h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); margin: 0; padding: 12px 14px 8px; font-weight: 600;
+  }
+  .vessel-card {
+    padding: 10px 14px; border-top: 1px solid var(--border); cursor: pointer;
+    transition: background 0.15s;
+  }
+  .vessel-card:hover { background: rgba(74, 222, 148, 0.07); }
+  .vessel-name { font-size: 13px; font-weight: 600; color: var(--text); }
+  .vessel-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.6; }
+  .vessel-meta .to { color: var(--accent); }
+
+  .leaflet-popup-content-wrapper { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  .leaflet-popup-tip { background: var(--panel); border: 1px solid var(--border); }
+  .leaflet-popup-content { margin: 10px 12px; }
+  .popup-name { font-weight: 600; font-size: 13px; margin-bottom: 5px; }
+  .popup-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.7; }
+  .popup-meta .to { color: var(--accent); }
+  .leaflet-control-attribution { background: rgba(16,27,40,0.8) !important; color: var(--muted) !important; }
+  .leaflet-control-attribution a { color: var(--muted) !important; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .blip-ring { animation: none !important; }
+  }
+
+  @media (max-width: 720px) {
+    .main { flex-direction: column; }
+    .panel { width: 100%; max-height: 38vh; border-left: none; border-top: 1px solid var(--border); }
+    .topbar h1 { font-size: 12px; }
+    .badge { font-size: 9px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <span class="dot"></span>
+    <h1>Hormuz Watch</h1>
+    <span class="count" id="count"></span>
+    <span class="badge">DEMO DATA — SAMPLE VESSELS, NOT LIVE</span>
+  </div>
+  <div class="main">
+    <div id="map"></div>
+    <div class="panel">
+      <h2>Tracked vessels</h2>
+      <div id="vessel-list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // --- DATA ----------------------------------------------------------
+  // In production, replace this block with:
+  //   const sightings = await fetch('sightings.json').then(r => r.json());
+  // (wrap the code below in an async function if you do that)
+  //
+  // For this preview, it's the exact output demo_with_sample_data.py
+  // just produced, pasted in directly so the page renders standalone.
+  const sightings = [
+    { "mmsi": 900000001, "lat": 26.57, "lon": 56.25, "imo": 9000001,
+      "name": "DEMO CARRIER ALPHA", "destination": "RDAM NL", "eta": "07151200" },
+    { "mmsi": 900000002, "lat": 26.3, "lon": 56.6, "imo": 9000002,
+      "name": "DEMO CARRIER BRAVO", "destination": "ZEEBRUGGE", "eta": "07180600" },
+    { "mmsi": 900000003, "lat": 26.75, "lon": 56.05, "imo": 9000003,
+      "name": "DEMO CARRIER CHARLIE", "destination": "SWINOUJSCIE PL", "eta": "07130800" }
+  ];
+
+  // --- MAP -------------------------------------------------------------
+  const map = L.map('map', { zoomControl: true }).setView([26.55, 56.3], 8);
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+    maxZoom: 18,
+  }).addTo(map);
+
+  // Radar-contact style marker instead of a default pin: a small core dot
+  // with an expanding ring, closer to what this data actually is (a ping).
+  function contactIcon() {
+    return L.divIcon({
+      className: '',
+      html: `<div style="position:relative;width:18px;height:18px;">
+               <div class="blip-ring" style="position:absolute;inset:0;border-radius:50%;
+                    background:#4ADE94;opacity:0.28;animation:blip-pulse 2.4s ease-out infinite;"></div>
+               <div style="position:absolute;top:6px;left:6px;width:6px;height:6px;border-radius:50%;
+                    background:#4ADE94;box-shadow:0 0 6px #4ADE94;"></div>
+             </div>`,
+      iconSize: [18, 18],
+      iconAnchor: [9, 9],
+    });
+  }
+  const styleTag = document.createElement('style');
+  styleTag.textContent = `@keyframes blip-pulse { 0% { transform: scale(0.5); opacity: 0.4; } 100% { transform: scale(2.8); opacity: 0; } }`;
+  document.head.appendChild(styleTag);
+
+  // aisstream ETA arrives as an 8-digit MMDDHHmm string, UTC, no year.
+  function formatEta(eta) {
+    if (!eta || eta.length !== 8) return eta || 'unknown';
+    const mm = eta.slice(0, 2), dd = eta.slice(2, 4), hh = eta.slice(4, 6), min = eta.slice(6, 8);
+    return `${mm}/${dd} ${hh}:${min}Z`;
+  }
+
+  const listEl = document.getElementById('vessel-list');
+  document.getElementById('count').textContent = sightings.length + (sightings.length === 1 ? ' contact' : ' contacts');
+
+  sightings.forEach(v => {
+    const marker = L.marker([v.lat, v.lon], { icon: contactIcon() }).addTo(map);
+    marker.bindPopup(
+      `<div class="popup-name">${v.name}</div>` +
+      `<div class="popup-meta">IMO ${v.imo} &middot; MMSI ${v.mmsi}<br>` +
+      `&rarr; <span class="to">${v.destination || 'unknown'}</span><br>` +
+      `ETA ${formatEta(v.eta)}</div>`
+    );
+
+    const card = document.createElement('div');
+    card.className = 'vessel-card';
+    card.innerHTML =
+      `<div class="vessel-name">${v.name}</div>` +
+      `<div class="vessel-meta">IMO ${v.imo}<br>` +
+      `&rarr; <span class="to">${v.destination || 'unknown'}</span> &middot; ETA ${formatEta(v.eta)}</div>`;
+    card.addEventListener('click', () => { map.setView([v.lat, v.lon], 10); marker.openPopup(); });
+    listEl.appendChild(card);
+  });
+</script>
+</body>
+</html>
