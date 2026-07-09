@@ -289,6 +289,9 @@ async def listen():
             async with websockets.connect(AISSTREAM_URL) as ws:
                 await ws.send(json.dumps({
                     "Apikey": api_key,
+                    "APIKey": api_key,  # aisstream.io's own docs and real-world examples
+                                        # disagree on capitalization; sending both costs
+                                        # nothing and resolves the ambiguity in one try
                     "BoundingBoxes": [HORMUZ_BBOX],
                     "FilterMessageTypes": ["PositionReport", "ShipStaticData"],
                 }))
