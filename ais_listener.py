@@ -170,7 +170,8 @@ async def listen():
         raise SystemExit("Set an AISSTREAM_KEY environment variable first (get a free key at aisstream.io).")
 
     conn = init_db()
-    asyncio.create_task(periodic_export(conn))
+    export_latest_sightings(conn)  # clear any stale committed demo data immediately,
+    asyncio.create_task(periodic_export(conn))  # rather than leaving it up to 60s
 
     delay = INITIAL_RECONNECT_DELAY
     while True:
