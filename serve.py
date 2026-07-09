@@ -43,6 +43,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
                 payload = json.load(f)
         except FileNotFoundError:
             payload = {"note": "sightings.json not written yet - listener may still be connecting"}
+        payload["recent_events"] = list(ais_listener.RECENT_EVENTS)
         body = json.dumps(payload, indent=2).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

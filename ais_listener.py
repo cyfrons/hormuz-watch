@@ -26,9 +26,25 @@ import asyncio
 import json
 import os
 import sqlite3
+import sys
+from collections import deque
 from datetime import datetime, timezone
 
 import websockets
+
+sys.stdout.reconfigure(line_buffering=True)  # flush every print immediately - matters if
+                                              # the process ever gets killed rather than exits cleanly
+
+# Last 50 diagnostic lines, newest last. serve.py exposes this via /status
+# so we're never dependent on finding the right tab in a hosting dashboard.
+RECENT_EVENTS = deque(maxlen=50)
+
+
+def log_event(message):
+    stamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    line = f"[{stamp}] {message}"
+    print(line)
+    RECENT_EVENTS.append(line)
 
 # Bounding box: [south-west corner], [north-east corner].
 # Loosely the Strait of Hormuz and its immediate approaches.
@@ -105,8 +121,8 @@ def handle_message(conn, raw_message):
     elif "error" in msg:
         # aisstream.io sends this as a real message before closing the
         # connection - e.g. an invalid key or a malformed subscription.
-        # Print it loudly rather than letting it vanish silently.
-        print(f"!!! aisstream.io reported an error: {msg['error']!r}")
+        # Log it loudly rather than letting it vanish silently.
+        log_event(f"!!! aisstream.io reported an error: {msg['error']!r}")
 
 
 def export_latest_sightings(conn, out_path=SIGHTINGS_PATH, source="live"):
@@ -151,8 +167,7 @@ async def periodic_export(conn):
     while True:
         await asyncio.sleep(EXPORT_INTERVAL_SECONDS)
         payload = export_latest_sightings(conn)
-        stamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
-        print(f"[{stamp}] exported {len(payload['vessels'])} vessel(s) to sightings.json")
+        log_event(f"exported {len(payload['vessels'])} vessel(s) to sightings.json")
 
 
 async def listen():
@@ -182,22 +197,26 @@ async def listen():
                     "BoundingBoxes": [HORMUZ_BBOX],
                     "FilterMessageTypes": ["PositionReport", "ShipStaticData"],
                 }))
-                print("Connected. Listening for vessels in the Hormuz bounding box...")
+                log_event("Connected. Listening for vessels in the Hormuz bounding box...")
                 delay = INITIAL_RECONNECT_DELAY  # reset backoff after a real success
+                msg_count = 0
                 async for raw in ws:
+                    msg_count += 1
+                    if msg_count == 1:
+                        log_event("First message received from aisstream.io.")
                     try:
                         handle_message(conn, raw)
                     except Exception as e:
                         # A single unexpected message shape shouldn't kill the whole
                         # connection - log it and keep going.
-                        print(f"Skipping one malformed message ({e!r}): {raw[:200]}")
+                        log_event(f"Skipping one malformed message ({e!r}): {raw[:200]}")
         except websockets.exceptions.InvalidStatus as e:
-            print(f"Handshake rejected: HTTP {e.response.status_code} {e.response.reason_phrase!r}. "
-                  f"Retrying in {delay}s...")
+            log_event(f"Handshake rejected: HTTP {e.response.status_code} {e.response.reason_phrase!r}. "
+                      f"Retrying in {delay}s...")
             await asyncio.sleep(delay)
             delay = min(delay * 2, MAX_RECONNECT_DELAY)
         except (websockets.exceptions.WebSocketException, OSError) as e:
-            print(f"Connection failed ({e!r}). Retrying in {delay}s...")
+            log_event(f"Connection failed ({e!r}). Retrying in {delay}s...")
             await asyncio.sleep(delay)
             delay = min(delay * 2, MAX_RECONNECT_DELAY)
 
